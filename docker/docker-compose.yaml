@@ -1,0 +1,16 @@
+services:
+  paddle-ocr-service:
+    build:
+      context: .
+      dockerfile: dockerfile
+    env_file: ./.env
+    environment:
+      - FILE_FOLDER_PATH=${FILE_FOLDER_PATH}
+      - PROCESSED_FILES_FOLDER_PATH=${PROCESSED_FILES_FOLDER_PATH}
+    volumes:
+      - ../data:/app/data/
+      - ../src:/app/src/
+    command: bash -c "python3 /app/src/ocr_with_paddle_and_tesseract.py"
+    restart: always
+    stdin_open: true
+    tty: true
