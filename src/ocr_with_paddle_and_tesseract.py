@@ -2,7 +2,7 @@ import os
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 import cv2
 import numpy as np
@@ -141,7 +141,7 @@ def ocr_pdf(pdf_path: Path,
     Roda OCR no PDF inteiro em paralelo (1 processo por página).
     Salva:
       - TXT concatenado
-      - JSON com {pagina: texto}
+      - JSON com [{"page": i, "text": "..."}]
     Retorna dict {pagina: texto}
     """
     pdf = pdfium.PdfDocument(str(pdf_path))
@@ -158,23 +158,37 @@ def ocr_pdf(pdf_path: Path,
             res = fut.result()
             page_texts[res["page"]] = res["text"]
 
-    # Ordenar páginas
-    ordered = {k: page_texts[k] for k in sorted(page_texts)}
+    # Ordenar páginas numericamente
+    ordered_dict = {k: page_texts[k] for k in sorted(page_texts)}
 
-    # Gravar TXT concatenado
+    # Montar representação na forma pedida:
+    # [
+    #   {"page": 1, "text": "..."},
+    #   {"page": 2, "text": "..."},
+    # ]
+    ordered_list: List[Dict[str, str]] = []
+    for page_idx in sorted(ordered_dict.keys()):
+        # page numerada a partir de 1 no JSON (como você mostrou)
+        ordered_list.append({
+            "page": page_idx + 1,
+            "text": ordered_dict[page_idx],
+        })
+
+    # Gravar TXT concatenado (todas as páginas em sequência)
     if out_txt is not None:
         out_txt.parent.mkdir(parents=True, exist_ok=True)
         with open(out_txt, "w", encoding="utf-8") as f:
-            for i in range(n_pages):
-                f.write(ordered.get(i, "") + "\n")
+            for page_obj in ordered_list:
+                f.write(page_obj["text"] + "\n")
 
-    # Gravar JSON página->texto
+    # Gravar JSON na nova estrutura pedida
     if out_json is not None:
         out_json.parent.mkdir(parents=True, exist_ok=True)
         with open(out_json, "w", encoding="utf-8") as f:
-            json.dump({"pages": ordered}, f, ensure_ascii=False, indent=2)
+            json.dump(ordered_list, f, ensure_ascii=False, indent=2)
 
-    return ordered
+    # Continua retornando {pagina_idx: texto} em zero-based internamente
+    return ordered_dict
 
 
 if __name__ == "__main__":
@@ -195,7 +209,7 @@ if __name__ == "__main__":
         if file_path.suffix.lower() not in [".pdf"]:
             continue
 
-        # monta nomes de saída específicos pra cada PDF
+        # nomes de saída específicos pra cada PDF
         base_name = file_path.stem  # "documento123" se "documento123.pdf"
         out_txt = BASE_OUT_DIR / f"{base_name}.txt"
         out_json = BASE_OUT_DIR / f"{base_name}.json"
