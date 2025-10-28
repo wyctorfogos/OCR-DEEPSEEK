@@ -3,21 +3,24 @@ import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Optional, List
-
+import logging
+import time
 import cv2
 import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image
 import pytesseract
+from dotenv import load_dotenv
 
+load_dotenv("./docker/.env")
 # =========================
 # CONFIGURAÇÕES GERAIS
 # =========================
 
-LANG = "por+eng"           # idiomas para OCR
-DPI = 300                  # ~300 dpi é um bom compromisso p/ Tesseract
-MAX_WORKERS = max(1, os.cpu_count() - 1)
-USE_PADDLE = True          # tenta GPU (se PaddleOCR com CUDA estiver disponível)
+LANG=str(os.getenv("LAN", "por+eng"))           # idiomas para OCR
+DPI=int(os.getenv("DPI", 200))                  # ~300 dpi é um bom compromisso p/ Tesseract
+MAX_WORKERS=max(int(os.getenv("MAX_WORKERS", 2)), os.cpu_count()-1)
+USE_PADDLE=bool(os.getenv("USE_PADDLE", True))          # tenta GPU (se PaddleOCR com CUDA estiver disponível)
 
 # Tesseract: limite threads internas para evitar briga de threads
 os.environ.setdefault("OMP_THREAD_LIMIT", "1")
@@ -35,7 +38,7 @@ if USE_PADDLE:
         paddle_ocr = PaddleOCR(
             use_gpu=True,
             lang="pt",          # ajuste se quiser multilíngue forte
-            use_angle_cls=True,
+            use_textline_orientation=True,
             rec=True,
             det=True
         )
@@ -102,7 +105,7 @@ def ocr_page_tesseract(image_bgr: np.ndarray) -> str:
     Usa config mais rígida (--psm 6) para blocos tipo formulário/texto alinhado.
     """
     img = _preprocess_for_tesseract(image_bgr)
-    cfg = "--oem 1 --psm 6 -c preserve_interword_spaces=1"
+    cfg = "--oem 1 --psm 3"
     text = pytesseract.image_to_string(img, lang=LANG, config=cfg)
     return text
 
@@ -174,12 +177,12 @@ def ocr_pdf(pdf_path: Path,
             "text": ordered_dict[page_idx],
         })
 
-    # Gravar TXT concatenado (todas as páginas em sequência)
-    if out_txt is not None:
-        out_txt.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_txt, "w", encoding="utf-8") as f:
-            for page_obj in ordered_list:
-                f.write(page_obj["text"] + "\n")
+    # # Gravar TXT concatenado (todas as páginas em sequência)
+    # if out_txt is not None:
+    #     out_txt.parent.mkdir(parents=True, exist_ok=True)
+    #     with open(out_txt, "w", encoding="utf-8") as f:
+    #         for page_obj in ordered_list:
+    #             f.write(page_obj["text"] + "\n")
 
     # Gravar JSON na nova estrutura pedida
     if out_json is not None:
@@ -190,14 +193,10 @@ def ocr_pdf(pdf_path: Path,
     # Continua retornando {pagina_idx: texto} em zero-based internamente
     return ordered_dict
 
-
-if __name__ == "__main__":
-    # Pastas fixas
-    BASE_IN_DIR = Path("./data/to_process")
-    BASE_OUT_DIR = Path("./data/output")
-
-    BASE_IN_DIR.mkdir(parents=True, exist_ok=True)
-    BASE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+def main(BASE_IN_DIR: Path, BASE_OUT_DIR: Path):
+    """
+    Varre BASE_IN_DIR atrás de PDFs novos e processa só os que ainda não têm saída.
+    """
 
     # Loop em todos os arquivos da pasta de entrada
     for filename in os.listdir(BASE_IN_DIR):
@@ -214,14 +213,34 @@ if __name__ == "__main__":
         out_txt = BASE_OUT_DIR / f"{base_name}.txt"
         out_json = BASE_OUT_DIR / f"{base_name}.json"
 
+        # se já existe resultado, não reprocesse
+        if out_json.exists() or out_txt.exists():
+            logging.info(f"[SKIP] {filename} já processado.")
+            continue
+
         # roda o OCR
+        logging.info(f"[PROCESSANDO] {filename} ...")
         result = ocr_pdf(
             pdf_path=file_path,
             out_txt=out_txt,
             out_json=out_json
         )
 
-        print(f"[OK] OCR finalizado para {filename}")
-        print(f" - Páginas processadas: {len(result)}")
-        print(f" - TXT salvo em:  {out_txt}")
-        print(f" - JSON salvo em: {out_json}")
+        logging.info(f"[OK] OCR finalizado para {filename}")
+        logging.info(f" - Páginas processadas: {len(result)}")
+        logging.info(f" - TXT salvo em:  {out_txt}")
+        logging.info(f" - JSON salvo em: {out_json}")
+
+
+if __name__ == "__main__":
+    # Pastas fixas
+    BASE_IN_DIR = Path("./data/to_process")
+    BASE_OUT_DIR = Path("./data/output")
+
+    BASE_IN_DIR.mkdir(parents=True, exist_ok=True)
+    BASE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    while True:
+        main(BASE_IN_DIR=BASE_IN_DIR, BASE_OUT_DIR=BASE_OUT_DIR)
+        logging.info("Verificando de 5 em 5 segundos se há novos casos...\n")
+        time.sleep(5)
